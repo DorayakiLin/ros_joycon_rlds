@@ -32,7 +32,7 @@ np.set_printoptions(linewidth=200)
 os.environ["MUJOCO_GL"] = "egl"
 
 from xarm.wrapper import XArmAPI  
-arm = XArmAPI('192.168.1.222')
+arm = XArmAPI('192.168.1.199')
 arm.motion_enable(enable=True) 
 arm.set_gripper_enable(enable=True)
 arm.set_mode(6)  
@@ -40,11 +40,17 @@ arm.set_state(0)
 
 JOINT_NAMES = ["robot0:shoulder_pan_joint","robot0:shoulder_lift_joint","robot0:elbow_flex_joint",
                "robot0:forearm_roll_joint","robot0:wrist_flex_joint","robot0:wrist_roll_joint"]
+GRIPPER_NAMES = ["robot0:left_finger_joint","robot0:right_finger_joint"]
 
-xml_path = "./examples/scene_xarm6.xml"
+xml_path = "/home/zhaobo/code/teleop2/ros_joycon_rlds/src/xarm_sys/scripts/xarm_joycon/examples/scene_xarm6.xml"
 mjmodel = mujoco.MjModel.from_xml_path(xml_path)
 qpos_indices = np.array([mjmodel.jnt_qposadr[mjmodel.joint(name).id] for name in JOINT_NAMES])
+gripper_indices = np.array([mjmodel.jnt_qposadr[mjmodel.joint(name).id] for name in GRIPPER_NAMES])
 mjdata = mujoco.MjData(mjmodel)
+
+ROLL_SPEED = 0.03
+# ROLL_RANGE = 1.919867
+ROLL_RANGE = 2.007
 
 JOINT_INCREMENT = 0.01  
 POSITION_INSERMENT = 0.002
@@ -95,8 +101,8 @@ def unwrap_and_clamp_angles_rad(curr_joint_angles, target_joint_angles):
 
 
 
-# init_qpos = np.array([14.1, -8, -24.7, 196.9, 62.3, -8.8])
-init_qpos = np.array([4.3, 15.5, -9.4, 182.6, 100.4 ,0.3])
+init_qpos = np.array([14.1, -8, -24.7, 196.9, 62.3, -8.8])
+# init_qpos = np.array([4.3, 15.5, -9.4, 182.6, 100.4 ,0.3])
 # init_qpos = np.array([7, 19.7, -20.2, 182.1, 88.1, -1.7])
 init_qpos = np.radians(init_qpos)
 # print("init_qpos", init_qpos)
@@ -125,7 +131,7 @@ control_glimit = [
 joyconrobotics_right = JoyconRobotics(
     device="right", 
     horizontal_stick_mode='yaw_diff', 
-    arm=arm,
+    # arm=arm,
     close_y=False, 
     limit_dof=True, 
     glimit=control_glimit,
@@ -149,7 +155,13 @@ initial_pitch = joyconrobotics_right.get_control()[0][4]
 control_frequency = 30
 time_interval = 1 / control_frequency
 
+open_state = -0.029
+close_state = 0
+gripper_speed = 0.001
+gripper_state = open_state
+
 t = 0
+roll_diff = 0
 try:
     with mujoco.viewer.launch_passive(mjmodel, mjdata) as viewer:
         start = time.time()
@@ -163,7 +175,7 @@ try:
                 viewer.sync()
 
             t += 1
-            target_pose, gripper_state_r, _ = joyconrobotics_right.get_control()
+            target_pose, gripper_state_r, _, roll_change = joyconrobotics_right.get_control()
 
             # print("gripper_state_r", gripper_state_r)
 
@@ -201,6 +213,7 @@ try:
                 # print("curr_angles_rad", np.rad2deg(curr_angles_rad[:-1]))             
                 # print("control_pos", np.rad2deg(control_pos))
                 command_angles_rad = unwrap_and_clamp_angles_rad(curr_angles_rad[:-1], control_pos)
+                # print(control_pos)
                 # print("command_angles_rad", np.rad2deg(command_angles_rad))
                 ########################## ROS ############################
                 # 发布 action 和 state（去掉最后一个 gripper 关节）
@@ -208,6 +221,16 @@ try:
                 # combine curr_angles_rad and curr_gripper_state
                 curr_state_msg = np.append(np.rad2deg(curr_angles_rad[:-1]), curr_gripper_state)
                 state_msg = Float64MultiArray(data=curr_state_msg)
+
+                if roll_change == -1 and roll_diff > (0 - ROLL_RANGE):
+                    roll_diff -= ROLL_SPEED
+                if roll_change == 1 and roll_diff < ROLL_RANGE:
+                    roll_diff += ROLL_SPEED
+
+                command_angles_rad[5] += roll_diff
+                # print(f"roll_diff: {roll_diff}")
+
+                # print(f"command_angle_rad: {command_angles_rad}")
 
                 if gripper_state_r == 1:
                     curr_action_msg = np.append(np.rad2deg(command_angles_rad), 730)
@@ -221,23 +244,31 @@ try:
                 # print("publish action", action_msg.data)
                 ############################################################
 
+                if gripper_state_r == 1 and gripper_state < close_state:
+                    gripper_state += gripper_speed
+                elif gripper_state_r == 0 and gripper_state > open_state:
+                    gripper_state -= gripper_speed
+
+                mj_joints = np.append(command_angles_rad, [gripper_state, gripper_state])
 
                 # print("robot target_qpos", control_pos)
                 # mjdata.qpos[qpos_indices] = control_pos
-                mjdata.qpos[qpos_indices] = command_angles_rad
+                # mjdata.qpos[qpos_indices] = command_angles_rad
+                all_indices = np.concatenate([qpos_indices, gripper_indices])
+                mjdata.qpos[all_indices] = mj_joints
                 mujoco.mj_step(mjmodel, mjdata)
                 # print("robot target_gpos",xarm6_lerobot_FK(control_pos,arm))
 
-                ###### START control real robot #######
-                arm.set_servo_angle(angle=command_angles_rad,speed=80,is_radian=True)
+                # ###### START control real robot #######
+                # arm.set_servo_angle(angle=command_angles_rad,speed=80,is_radian=True)
 
-                if gripper_state_r == 1:
-                    # print("gripper open")
-                    arm.set_gripper_position(pos=730, wait=False)
-                else:
-                    # print("gripper close")
-                    arm.set_gripper_position(pos=50, wait=False)
-                ###### END control real robot #######
+                # if gripper_state_r == 1:
+                #     # print("gripper open")
+                #     arm.set_gripper_position(pos=730, wait=False)
+                # else:
+                #     # print("gripper close")
+                #     arm.set_gripper_position(pos=50, wait=False)
+                # ###### END control real robot #######
 
 
                 # print("xarm6_real_qpos",arm.get_servo_angle(is_radian=True))

@@ -196,6 +196,8 @@ class JoyconRobotics:
         self.gripper_open = gripper_open
         self.gripper_close = gripper_close
         self.gripper_state = gripper_state # 1 for open, 0 for close
+
+        self.roll_change = 0
         
         self.position = offset_position_m.copy()
         self.orientation_rad = offset_euler_rad.copy()
@@ -330,6 +332,17 @@ class JoyconRobotics:
             self.position[0] += 0.001 * self.dof_speed[0]
         elif joycon_button_xback == 1:
             self.position[0] -= 0.001 * self.dof_speed[0]
+
+        joycon_button_rollleft = self.joycon.get_button_y() if self.joycon.is_right() else self.joycon.get_button_left()
+        joycon_button_rollright = self.joycon.get_button_a() if self.joycon.is_right() else self.joycon.get_button_right()
+        if joycon_button_rollleft == 1:
+            # self.offset_euler_rad[2] -= 0.003 * self.dof_speed[3]
+            self.roll_change = -1
+        elif joycon_button_rollright == 1:
+            # self.offset_euler_rad[2] += 0.003 * self.dof_speed[3]
+            self.roll_change = 1
+        else:
+            self.roll_change = 0
         
         joycon_button_home = self.joycon.get_button_home() if self.joycon.is_right() else self.joycon.get_button_capture()
         if joycon_button_home == 1:
@@ -427,6 +440,7 @@ class JoyconRobotics:
         # self.direction_vector = vec3(math.cos(pitch) * math.cos(yaw), 
         #                              math.cos(pitch) * math.sin(yaw), 
         #                              math.sin(pitch))
+
         self.direction_vector = vec3(
             -math.cos(yaw) * math.cos(pitch),
             math.sin(yaw) * math.cos(pitch),
@@ -483,7 +497,7 @@ class JoyconRobotics:
             
         self.posture = [x,y,z,roll, pitch, yaw]
         # print(f'{self.posture=}')
-        return self.posture, self.gripper_state, self.button_control
+        return self.posture, self.gripper_state, self.button_control, self.roll_change
             
     
     # More information
@@ -557,10 +571,4 @@ class JoyconRobotics:
         # glimit = [x_speed, y_speed, z_speed, _, _, yaw_speed]
         self.dof_speed = dof_speed
         return
-    
-    
-    
-    
-    
-    
     
